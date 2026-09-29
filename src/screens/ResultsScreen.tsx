@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Spacing } from '@/constants/theme';
-import { getMenuByJoinCode, getMenuItems, getRatingsForMenu, getSubmissionsForMenu } from '@/firebase';
+import { getCommentsForMenu, getMenuByJoinCode, getMenuItems, getRatingsForMenu, getSubmissionsForMenu } from '@/firebase';
 import { useTheme } from '@/hooks/use-theme';
 import { ScreenLayout } from './ScreenLayout';
 
@@ -22,6 +22,7 @@ type SubmissionRow = {
   reviewerName: string | null;
   createdAt: unknown;
 };
+type CommentRow = { itemId: string; text: string; submissionId: string | null };
 type RankedItem = { id: string; name: string; avg: number; count: number; notes: string[] };
 type SubmissionView = {
   id: string;
@@ -46,6 +47,7 @@ export default function ResultsScreen() {
   const [topItems, setTopItems] = useState<RankedItem[]>([]);
   const [lowItems, setLowItems] = useState<RankedItem[]>([]);
   const [allSubmissions, setAllSubmissions] = useState<SubmissionView[]>([]);
+  const [commentsByItem, setCommentsByItem] = useState<Record<string, { text: string; reviewerName: string | null }[]>>({});
 
   const verify = async () => {
     setError(null);
@@ -105,12 +107,19 @@ export default function ResultsScreen() {
       setTopItems(desc);
       setLowItems(asc);
 
-      const submissions = asArray<SubmissionRow>(await getSubmissionsForMenu(menu.id));
+      const [submissionsResult, commentsResult] = await Promise.all([
+        getSubmissionsForMenu(menu.id),
+        getCommentsForMenu(menu.id),
+      ]);
+      const submissions = asArray<SubmissionRow>(submissionsResult);
+      const comments = asArray<CommentRow>(commentsResult);
       const grouped: Record<string, SubmissionView> = {};
+      const reviewerNames: Record<string, string | null> = {};
 
       submissions.forEach((s) => {
         const id = String(s.id ?? '');
         if (!id) return;
+        reviewerNames[id] = s.reviewerName;
         grouped[id] = {
           id,
           note: typeof s.note === 'string' ? s.note : null,
@@ -139,6 +148,19 @@ export default function ResultsScreen() {
       });
 
       setAllSubmissions(Object.values(grouped));
+      const commentsByItemId: Record<string, { text: string; reviewerName: string | null }[]> = {};
+      comments.forEach((comment) => {
+        const itemId = String(comment.itemId ?? '');
+        const text = typeof comment.text === 'string' ? comment.text.trim() : '';
+        if (!itemId || !text) return;
+
+        commentsByItemId[itemId] = commentsByItemId[itemId] ?? [];
+        commentsByItemId[itemId].push({
+          text,
+          reviewerName: comment.submissionId ? reviewerNames[comment.submissionId] ?? null : null,
+        });
+      });
+      setCommentsByItem(commentsByItemId);
     } catch (verifyError) {
       const message = verifyError instanceof Error ? verifyError.message : 'Unable to verify. Try again.';
       setError(message);
@@ -213,6 +235,11 @@ export default function ResultsScreen() {
                   <Text style={[styles.rowText, { color: theme.text }]}>
                     Avg: {it.avg.toFixed(2)}/5 - {it.count} review{it.count === 1 ? '' : 's'}
                   </Text>
+                  {(commentsByItem[it.id] ?? []).map((comment, index) => (
+                    <Text key={`${it.id}-comment-${index}`} style={[styles.rowText, { color: theme.text }]}>
+                      {comment.reviewerName ?? 'Anonymous'}: &quot;{comment.text}&quot;
+                    </Text>
+                  ))}
                   {it.notes[0] ? (
                     <Text style={[styles.rowText, { color: theme.text }]}>"{it.notes[0].slice(0, 120)}"</Text>
                   ) : null}
